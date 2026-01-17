@@ -21,7 +21,12 @@ let game = {
         { id: 3, text: "Qual meu destino de sonho?", icon: "plane", options: ["Praia (Maldivas)", "Neve (Suíça)", "Disney (Orlando)", "Cidade (Nova York)", "História (Roma)", "Natureza (Safari)", "Japão", "Brasil"] },
         { id: 4, text: "Qual meu maior medo?", icon: "ghost", options: ["Altura", "Escuro", "Aranhas/Insetos", "Ficar sozinho", "Falar em público", "Palhaços", "Perder alguém", "Fracasso"] },
         { id: 5, text: "Gênero musical favorito?", icon: "music", options: ["Pop", "Rock", "Sertanejo", "Funk", "Trap/Rap", "Eletrônica", "MPB", "Pagode"] }
-    ]
+    ],
+    chat: {
+        isOpen: false,
+        unreadCount: 0,
+        replyingTo: null // { name: string, text: string }
+    }
 };
 
 sessionStorage.setItem('fq_playerId', game.playerId);
@@ -198,30 +203,53 @@ async function refreshRooms() {
 // --- REALTIME ---
 
 function startRoomSubscription() {
-    game.subscription = supabaseClient
-        .channel(`room:${game.roomCode}`)
-        .on('postgres_changes', { 
-            event: 'UPDATE', 
-            schema: 'public', 
-            table: 'rooms', 
-            filter: `code=eq.${game.roomCode}` 
-        }, payload => {
-            handleRoomUpdate(payload.new.data);
-        })
-        .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-            // Se alguém sair via Presence (ex: fechou aba), removemos do JSON de jogadores
-            leftPresences.forEach(p => {
-                if (game.isHost) syncPlayerRemoval(p.userId);
-            });
-        })
-        .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                await game.subscription.track({
-                    userId: game.playerId,
-                    online_at: new Date().toISOString(),
-                });
-            }
+    // Definimos o canal
+    const channelId = `room:${game.roomCode}`;
+    
+    game.subscription = supabaseClient.channel(channelId, {
+        config: {
+            broadcast: { self: false }
+        }
+    });
+
+    // 1. Escutar Mudanças no Banco (Estado do Jogo)
+    game.subscription.on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'rooms', 
+        filter: `code=eq.${game.roomCode}` 
+    }, payload => {
+        handleRoomUpdate(payload.new.data);
+    });
+
+    // 2. Escutar Mensagens de Chat (Broadcast)
+    game.subscription.on('broadcast', { event: 'chat_message' }, ({ payload }) => {
+        console.log("%c[Chat] Mensagem Recebida:", "color: #00ff00; font-weight: bold;", payload);
+        if (payload.senderId !== game.playerId) {
+            renderChatMessage(payload);
+        }
+    });
+
+    // 3. Gerenciar Presença
+    game.subscription.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        leftPresences.forEach(p => {
+            if (game.isHost) syncPlayerRemoval(p.userId);
         });
+    });
+
+    // 4. Ativar Inscrição
+    game.subscription.subscribe(async (status) => {
+        console.log(`%c[Realtime] Status: ${status}`, "color: #888;");
+        if (status === 'SUBSCRIBED') {
+            await game.subscription.track({
+                userId: game.playerId,
+                online_at: new Date().toISOString(),
+            });
+        }
+    });
+
+    window.chatChannel = game.subscription; 
+    console.log(`%c[Chat] Ativado no canal: ${channelId}`, "color: #0088ff; font-weight: bold;");
 
     // Fetch inicial
     supabaseClient.from('rooms').select('data').eq('code', game.roomCode).single().then(({data}) => {
@@ -655,4 +683,116 @@ async function updateRoomState(newState) {
 
 function shuffleArray(arr) {
     return arr.sort(() => Math.random() - 0.5);
+}
+
+// --- CHAT FUNCTIONS ---
+
+function toggleChat() {
+    game.chat.isOpen = !game.chat.isOpen;
+    const windowEl = document.getElementById('chat-window');
+    const badgeEl = document.getElementById('chat-badge');
+    
+    if (game.chat.isOpen) {
+        windowEl.classList.add('open');
+        game.chat.unreadCount = 0;
+        badgeEl.classList.add('hidden');
+        badgeEl.innerText = '0';
+        document.getElementById('chat-input').focus();
+        
+        // Auto scroll ao abrir
+        const msgs = document.getElementById('chat-messages');
+        msgs.scrollTop = msgs.scrollHeight;
+    } else {
+        windowEl.classList.remove('open');
+    }
+}
+
+function handleChatSubmit(e) {
+    e.preventDefault();
+    const input = document.getElementById('chat-input');
+    const text = input.value.trim();
+    
+    if (!text) return;
+
+    const messagePayload = {
+        senderId: game.playerId,
+        senderName: game.playerName || 'Anônimo',
+        text: text,
+        reply: game.chat.replyingTo
+    };
+
+    // Enviar via Broadcast
+    if (game.subscription) {
+        console.log("%c[Chat] Enviando Mensagem:", "color: #ffff00; font-weight: bold;", messagePayload);
+        game.subscription.send({
+            type: 'broadcast',
+            event: 'chat_message',
+            payload: messagePayload
+        });
+    } else {
+        console.error("%c[Chat] Erro: Sem inscrição ativa no canal!", "color: #ff0000; font-weight: bold;");
+    }
+
+    // Renderizar para si mesmo localmente
+    renderChatMessage(messagePayload);
+
+    input.value = '';
+    cancelReply();
+}
+
+function renderChatMessage(payload) {
+    const container = document.getElementById('chat-messages');
+    const isMe = payload.senderId === game.playerId;
+    
+    // Se o chat estiver fechado e a mensagem não for minha, aumenta unread
+    if (!game.chat.isOpen && !isMe) {
+        game.chat.unreadCount++;
+        const badge = document.getElementById('chat-badge');
+        badge.innerText = game.chat.unreadCount;
+        badge.classList.remove('hidden');
+    }
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `max-w-[85%] p-3 flex flex-col shadow-sm animate-fade ${isMe ? 'message-sent' : 'message-received'}`;
+    
+    let replyHtml = '';
+    if (payload.reply) {
+        replyHtml = `
+            <div class="reply-indicator">
+                <div class="font-bold opacity-70">${payload.reply.name}</div>
+                <div class="truncate italic opacity-60">${payload.reply.text}</div>
+            </div>
+        `;
+    }
+
+    msgDiv.innerHTML = `
+        ${!isMe ? `<span class="text-[10px] font-bold uppercase mb-1 opacity-50">${payload.senderName}</span>` : ''}
+        ${replyHtml}
+        <div class="text-sm leading-relaxed">${payload.text}</div>
+    `;
+
+    // Clique para responder
+    msgDiv.onclick = () => {
+        if (isMe) return;
+        setReply(payload.senderName, payload.text);
+    };
+    msgDiv.style.cursor = 'pointer';
+
+    container.appendChild(msgDiv);
+    
+    // Auto scroll
+    container.scrollTop = container.scrollHeight;
+}
+
+function setReply(name, text) {
+    game.chat.replyingTo = { name, text };
+    document.getElementById('reply-name').innerText = name;
+    document.getElementById('reply-text').innerText = text;
+    document.getElementById('reply-preview').classList.remove('hidden');
+    document.getElementById('chat-input').focus();
+}
+
+function cancelReply() {
+    game.chat.replyingTo = null;
+    document.getElementById('reply-preview').classList.add('hidden');
 }
