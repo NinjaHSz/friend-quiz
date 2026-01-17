@@ -16,11 +16,11 @@ let game = {
     subscription: null,
     localSelection: null, // Armazena a seleção da rodada atual para destaque visual
     questions: [
-        { id: 1, text: "Qual minha comida favorita?", icon: "utensils", options: ["Pizza", "Hambúrguer", "Sushi", "Churrasco", "Massa", "Salada", "Açaí", "Pastel"] },
-        { id: 2, text: "Qual meu hobby preferido?", icon: "gamepad", options: ["Games", "Ler Livros", "Viajar", "Academia", "Assistir Séries", "Cozinhar", "Ouvir Música", "Dormir"] },
-        { id: 3, text: "Qual meu destino de sonho?", icon: "plane", options: ["Praia (Maldivas)", "Neve (Suíça)", "Disney (Orlando)", "Cidade (Nova York)", "História (Roma)", "Natureza (Safari)", "Japão", "Brasil"] },
-        { id: 4, text: "Qual meu maior medo?", icon: "ghost", options: ["Altura", "Escuro", "Aranhas/Insetos", "Ficar sozinho", "Falar em público", "Palhaços", "Perder alguém", "Fracasso"] },
-        { id: 5, text: "Gênero musical favorito?", icon: "music", options: ["Pop", "Rock", "Sertanejo", "Funk", "Trap/Rap", "Eletrônica", "MPB", "Pagode"] }
+        { id: 1, text: "Qual minha comida favorita?", icon: "utensils", placeholders: ["Pizza", "Churrasco", "Sushi", "Hambúrguer"] },
+        { id: 2, text: "Qual meu hobby preferido?", icon: "gamepad", placeholders: ["Games", "Ler", "Academia", "Viajar"] },
+        { id: 3, text: "Qual meu destino de sonho?", icon: "plane", placeholders: ["Japão", "Maldivas", "Suíça", "Disney"] },
+        { id: 4, text: "Qual meu maior medo?", icon: "ghost", placeholders: ["Altura", "Aranhas", "Escuro", "Fracasso"] },
+        { id: 5, text: "Gênero musical favorito?", icon: "music", placeholders: ["Rock", "Pop", "Sertanejo", "Funk"] }
     ],
     chat: {
         isOpen: false,
@@ -327,7 +327,7 @@ function renderEntryScreen() {
                 <label class="text-xs font-bold text-google-blue uppercase flex items-center gap-2 mb-1">
                     <i class="fas fa-${q.icon}"></i> ${q.text}
                 </label>
-                <p class="text-[10px] text-gray-500 uppercase tracking-tighter">Escreva 4 opções e marque a <span class="text-google-green">correta</span></p>
+                <p class="text-[10px] text-gray-500 uppercase tracking-tighter">Escreva a resposta <span class="text-google-green font-bold text-xs">CORRETA</span> na primeira linha</p>
             </div>
             
             <div class="space-y-3" id="q-inputs-${q.id}">
@@ -335,30 +335,32 @@ function renderEntryScreen() {
                     <div class="flex gap-2 items-center group">
                         <div class="relative flex-grow">
                             <input type="text" 
-                                class="entry-text-input w-full bg-[#2b2930] border-b-2 border-white/10 rounded-t-xl px-4 py-3 text-sm focus:border-google-blue focus:bg-white/5 outline-none transition-all"
-                                placeholder="Opção ${i+1}..."
-                                value="Opção ${i+1}"
+                                class="entry-text-input w-full bg-[#2b2930] border-b-2 border-white/10 rounded-t-xl px-4 py-3 text-sm focus:border-google-blue focus:bg-white/5 outline-none transition-all placeholder:italic placeholder:opacity-40"
+                                placeholder="Ex: ${q.placeholders[i]}..."
+                                value=""
                                 data-q-id="${q.id}" data-idx="${i}">
                         </div>
-                        <button type="button" 
-                            onclick="setCorrectEntry(${q.id}, ${i})"
-                            id="btn-correct-${q.id}-${i}"
-                            class="correct-selector-btn min-w-[44px] h-[44px] rounded-full border border-white/10 flex items-center justify-center text-gray-500 hover:border-google-green hover:text-google-green transition-all"
-                            title="Marcar como correta">
-                            <i class="fas fa-check"></i>
-                        </button>
+                        <div class="min-w-[44px] h-[44px] flex items-center justify-center transition-all">
+                            ${i === 0 ? `
+                                <div class="w-8 h-8 rounded-full bg-google-green/10 border border-google-green text-google-green flex items-center justify-center shadow-lg shadow-google-green/5 animate-pulse" title="Sua resposta correta vai aqui">
+                                    <i class="fas fa-check text-xs"></i>
+                                </div>
+                            ` : `
+                                <div class="w-8 h-8 rounded-full border border-white/5 flex items-center justify-center text-gray-800">
+                                    <i class="fas fa-minus text-[10px]"></i>
+                                </div>
+                            `}
+                        </div>
                     </div>
                 `).join('')}
             </div>
         </div>
     `).join('');
     
-    // Armazenar qual índice é o correto para cada questão (Padrão: 2ª opção, índice 1)
+    // Forçar a primeira opção como a correta para todas as questões
     window.correctAnswers = {};
     game.questions.forEach(q => {
-        window.correctAnswers[q.id] = 1;
-        // Ativar visualmente o botão da 2ª opção
-        setTimeout(() => setCorrectEntry(q.id, 1), 50);
+        window.correctAnswers[q.id] = 0;
     });
 }
 
@@ -366,14 +368,14 @@ function setCorrectEntry(qId, idx) {
     // Resetar todos os botões daquela questão
     const container = document.getElementById(`q-inputs-${qId}`);
     container.querySelectorAll('.correct-selector-btn').forEach(btn => {
-        btn.classList.remove('bg-google-green', 'text-black', 'border-google-green', 'shadow-lg');
+        btn.classList.remove('text-google-green', 'border-google-green', 'bg-google-green/10', 'scale-110');
         btn.classList.add('text-gray-500', 'border-white/10');
     });
 
-    // Marcar o novo botão
+    // Marcar o novo botão de forma mais leve (apenas cores e escala)
     const targetBtn = document.getElementById(`btn-correct-${qId}-${idx}`);
     targetBtn.classList.remove('text-gray-500', 'border-white/10');
-    targetBtn.classList.add('bg-google-green', 'text-black', 'border-google-green', 'shadow-lg');
+    targetBtn.classList.add('text-google-green', 'border-google-green', 'bg-google-green/10', 'scale-110');
 
     window.correctAnswers[qId] = idx;
 }
